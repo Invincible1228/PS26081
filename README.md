@@ -51,12 +51,12 @@ Historically, duty forecasters reconcile diverging feeds through manual heuristi
 | Mandatory Requirement (PS 26081) | MEGH Production Implementation | Verification Standard |
 |---|---|---|
 | **Heterogeneous Multi-Model Ingestion** | Ingests 6 concurrent streams: NOAA GFS, ECMWF IFS, DWD ICON, JMA, CMC GEM, and ECMWF AIFS across 10 Indian hubs. | Automated HTTP retry adapter with exponential backoff. |
-| **Physical Units & Schema Normalization** | Harmonizes disparate vendor keys into SI units with strict non-negative clipping: $\hat{Y} = \max(Y, 0.0)$. | Zero unphysical negative values verified across 6,720 rows. |
-| **Context-Aware Dynamic Weight Learning** | Models non-linear error distributions using spatial coordinates, cyclical diurnal/annual harmonics, and lead time ($0$–$168\text{h}$). | LightGBM regression with regularized shrinkage prior. |
-| **Probability Simplex Preservation** | Guarantees $w_m \ge 0$ and $\sum_{m=1}^M w_m = 1.0$ for every sample using temperature-scaled Softmax normalization. | Audit Check 17 & 18: Exact $1.0000$ sum across all timesteps. |
-| **Extreme Weather Detection** | Detects IMD threshold exceedances (Rainfall $>15\text{ mm/h}$, Wind $>40\text{ km/h}$, Temperature $>40^\circ\text{C}$). | $91.3\%$ POD, $87.5\%$ Critical Success Index (CSI). |
-| **Explainable Model Attribution** | Computes station-hourly dominant model tags ($\arg\max w_m$) and percentage contribution vectors. | Real-time trust heatmaps stored in Parquet and SQLite. |
-| **Zero-Cloud, High-Speed Performance** | Columnar Apache Parquet storage and vectorized NumPy/SciPy math executing in **$<2.5\text{ seconds}$ on commodity laptop CPUs**. | No GPU or dedicated cloud cluster required. |
+| **Physical Units & Schema Normalization** | Harmonizes disparate vendor keys into SI units with strict non-negative clipping: `Y_clipped = max(Y, 0.0)`. | Zero unphysical negative values verified across 6,720 rows. |
+| **Context-Aware Dynamic Weight Learning** | Models non-linear error distributions using spatial coordinates, cyclical diurnal/annual harmonics, and lead time (0–168h). | LightGBM regression with regularized shrinkage prior. |
+| **Probability Simplex Preservation** | Guarantees `w_m ≥ 0` and `Sum(w_m) == 1.0` for every sample using temperature-scaled Softmax normalization. | Audit Check 17 & 18: Exact 1.0000 sum across all timesteps. |
+| **Extreme Weather Detection** | Detects IMD threshold exceedances (Rainfall > 15 mm/h, Wind > 40 km/h, Temperature > 40 °C). | 91.3% POD, 87.5% Critical Success Index (CSI). |
+| **Explainable Model Attribution** | Computes station-hourly dominant model tags (`argmax w_m`) and percentage contribution vectors. | Real-time trust heatmaps stored in Parquet and SQLite. |
+| **Zero-Cloud, High-Speed Performance** | Columnar Apache Parquet storage and vectorized NumPy/SciPy math executing in **< 2.5 seconds on commodity laptop CPUs**. | No GPU or dedicated cloud cluster required. |
 | **Integrity & Quality Gates** | Comprehensive 26-point validation suite verifying row sync, temporal continuity, and physical bounds. | **26 / 26 automated checks passed** on every operational run. |
 
 ---
@@ -137,7 +137,7 @@ All models are ingested hourly across a **168-hour (7-day)** runway covering 4 c
 1. **2m Air Temperature** ($^\circ\text{C}$)
 2. **Hourly Precipitation** ($\text{mm}$)
 3. **10m Wind Speed** ($\text{km/h}$)
-4. **Surface Pressure** ($\text{hPa}$)
+4. **Surface Pressure** (hPa)
 
 ---
 
@@ -146,20 +146,39 @@ All models are ingested hourly across a **168-hour (7-day)** runway covering 4 c
 MEGH implements a tri-strategy comparative framework to benchmark operational performance:
 
 ### Strategy A: Equal-Weight Ensemble Baseline
-$$\hat{Y}_{\text{eq}} = \frac{1}{M}\sum_{m=1}^{M} X_m$$
+
+$$
+\hat{Y}_{\text{eq}} = \frac{1}{M} \sum_{m=1}^{M} X_m
+$$
+
 Provides standard unweighted arithmetic consensus; acts as the primary baseline for skill gain measurement.
 
 ### Strategy B: Dynamic Inverse-Error Weighting
-$$w_m = \frac{\left(\frac{1}{\text{RMSE}_m}\right)^p}{\sum_{k=1}^M \left(\frac{1}{\text{RMSE}_k}\right)^p}, \quad \hat{Y}_{\text{inv}} = \sum_{m=1}^M w_m X_m$$
+
+$$
+w_m = \frac{\left(\frac{1}{\text{RMSE}_m}\right)^p}{\sum_{k=1}^M \left(\frac{1}{\text{RMSE}_k}\right)^p}, \quad \hat{Y}_{\text{inv}} = \sum_{m=1}^M w_m X_m
+$$
+
 Models historical skill from paired ERA5 reanalysis without iterative machine learning overhead. Excels particularly in zero-inflated sparse precipitation regimes.
 
 ### Strategy C: Context-Aware Adaptive ML Blending (LightGBM + Softmax)
-Models non-linear residual skill $S_m = -|X_m - Y_{\text{obs}}|$ conditioned on feature vector $\mathbf{x}$:
-$$\mathbf{x} = \Big[\text{lat}, \text{lon}, \text{elevation}, \text{zone}, \sin(\theta_h), \cos(\theta_h), \sin(\theta_m), \cos(\theta_m), t_{\text{lead}}, \mu_{\text{ens}}, \sigma_{\text{ens}}, \text{spread}_{\text{norm}}\Big]$$
 
-Raw predictions are transformed to calibrated model weights via regularized Softmax projection:
-$$w_m = \alpha \cdot \frac{\exp(\hat{z}_m / T)}{\sum_{k=1}^M \exp(\hat{z}_k / T)} + (1 - \alpha) \cdot w_{\text{prior}, m}$$
-where $T$ is the dimension-calibrated temperature parameter and $\alpha$ is the regularization shrinkage factor.
+Models non-linear residual skill $S_m = -\lvert X_m - Y_{\text{obs}} \rvert$ conditioned on feature vector $\mathbf{x}$:
+
+$$
+\mathbf{x} = \left[ \text{lat}, \text{lon}, \text{elevation}, \text{zone}, \sin(\theta_h), \cos(\theta_h), \sin(\theta_m), \cos(\theta_m), t_{\text{lead}}, \mu_{\text{ens}}, \sigma_{\text{ens}}, \text{spread}_{\text{norm}} \right]
+$$
+
+Raw skill predictions $\hat{z}_m$ are transformed into calibrated model weights via regularized Softmax projection:
+
+$$
+w_m = \alpha \cdot \frac{\exp(\hat{z}_m / T)}{\sum_{k=1}^M \exp(\hat{z}_k / T)} + (1 - \alpha) \cdot w_{\text{prior}, m}
+$$
+
+where:
+- $T$ is the dimension-calibrated temperature scaling parameter ($T = \max(0.5 \cdot \sigma_{\text{obs}}, 0.2)$).
+- $\alpha \in [0, 1]$ is the regularization shrinkage factor (anchoring to the inverse-error prior).
+- $\mathbf{w} \in \Delta^{M-1}$ strictly satisfies the mathematical unit simplex constraint: $w_m \ge 0$ and $\sum_{m=1}^M w_m = 1.0$.
 
 ---
 
@@ -167,18 +186,20 @@ where $T$ is the dimension-calibrated temperature parameter and $\alpha$ is the 
 
 MEGH operationalizes IMD classification thresholds with calibrated multi-model consensus and uncertainty metrics:
 
-$$\text{Confidence (\%)} = \left(\frac{N_{\text{exceed}}}{N_{\text{active models}}} \times 70\%\right) + \Big(1.0 - \min(\text{Normalized Spread}, 1.0)\Big) \times 30\%$$
+$$
+\text{Confidence} = \left( \frac{N_{\text{exceed}}}{N_{\text{models}}} \times 70\% \right) + \Big( 1.0 - \min(\text{spread}_{\text{norm}}, 1.0) \Big) \times 30\%
+$$
 
 | Hazard Category | Monitored Parameter | Operational Threshold | Alert Tier | IMD Precautionary Protocol |
 |---|---|---|---|---|
-| **Heavy Rainfall** | Precipitation | $\ge 15.0\text{ mm/h}$ | `ADVISORY / WATCH` | Convective cloudburst monitoring; localized drainage alert |
-| **Very Heavy Rain**| Precipitation | $\ge 64.5\text{ mm/24h}$ | `WARNING` | Urban inundation advisories, disaster response standby |
-| **Extremely Heavy** | Precipitation | $\ge 115.5\text{ mm/24h}$ | `CRITICAL` | Flash flood and landslide red alert; evacuation readiness |
-| **Plains Heatwave** | 2m Temperature | $\ge 40.0^\circ\text{C}$ | `WARNING` | Daytime thermal stress alert; public hydration advisories |
-| **Severe Heatwave** | 2m Temperature | $\ge 45.0^\circ\text{C}$ | `CRITICAL` | Severe thermal emergency; outdoor labor suspension |
-| **Hills Heatwave**  | 2m Temperature | $\ge 30.0^\circ\text{C}$ | `WARNING` | Montane thermal anomaly warning for Himalayan valleys |
-| **Squally Winds**   | 10m Wind Speed | $\ge 40.0\text{ km/h}$ | `WATCH` | Marine coastal warning; small craft advisory |
-| **Gale-Force Winds**| 10m Wind Speed | $\ge 62.0\text{ km/h}$ | `WARNING / CRITICAL` | Severe cyclonic wind alert; infrastructure protection |
+| **Heavy Rainfall** | Precipitation | ≥ 15.0 mm/h | `ADVISORY / WATCH` | Convective cloudburst monitoring; localized drainage alert |
+| **Very Heavy Rain**| Precipitation | ≥ 64.5 mm/24h | `WARNING` | Urban inundation advisories, disaster response standby |
+| **Extremely Heavy** | Precipitation | ≥ 115.5 mm/24h | `CRITICAL` | Flash flood and landslide red alert; evacuation readiness |
+| **Plains Heatwave** | 2m Temperature | ≥ 40.0 °C | `WARNING` | Daytime thermal stress alert; public hydration advisories |
+| **Severe Heatwave** | 2m Temperature | ≥ 45.0 °C | `CRITICAL` | Severe thermal emergency; outdoor labor suspension |
+| **Hills Heatwave**  | 2m Temperature | ≥ 30.0 °C | `WARNING` | Montane thermal anomaly warning for Himalayan valleys |
+| **Squally Winds**   | 10m Wind Speed | ≥ 40.0 km/h | `WATCH` | Marine coastal warning; small craft advisory |
+| **Gale-Force Winds**| 10m Wind Speed | ≥ 62.0 km/h | `WARNING / CRITICAL` | Severe cyclonic wind alert; infrastructure protection |
 
 ---
 
@@ -188,24 +209,24 @@ Verification was performed on 960 paired forecast–observation samples evaluate
 
 ### Continuous Verification Scorecard (WMO Verification Metrics)
 
-| Meteorological Variable | Best Standalone NWP Model | Standalone NWP RMSE | MEGH Operational Blend RMSE | Skill Score Gain ($\Delta \text{MSE}$) | Pearson Correlation ($R$) |
+| Meteorological Variable | Best Standalone NWP Model | Standalone NWP RMSE | MEGH Operational Blend RMSE | Skill Score Gain (ΔMSE) | Pearson Correlation (R) |
 |---|---|---|---|---|---|
-| **2m Temperature** | ECMWF IFS | $0.653^\circ\text{C}$ | **$0.522^\circ\text{C}$** | **+36.0% Skill Gain** (20.0% RMSE Reduction) | **$0.996$** |
-| **Precipitation** | ECMWF IFS | $0.131\text{ mm}$ | **$0.122\text{ mm}$** | **+13.5% Skill Gain** (6.9% RMSE Reduction) | **$0.545$** |
-| **10m Wind Speed** | ECMWF IFS | $1.674\text{ km/h}$ | **$1.650\text{ km/h}$** | **+2.9% Skill Gain** (1.4% RMSE Reduction) | **$0.892$** |
-| **Surface Pressure**| ECMWF IFS | $0.261\text{ hPa}$ | **$0.277\text{ hPa}$** | Hydrostatic balance maintained | **$1.000$** |
+| **2m Temperature** | ECMWF IFS | 0.653 °C | **0.522 °C** | **+36.0% Skill Gain** (20.0% RMSE Reduction) | **0.996** |
+| **Precipitation** | ECMWF IFS | 0.131 mm | **0.122 mm** | **+13.5% Skill Gain** (6.9% RMSE Reduction) | **0.545** |
+| **10m Wind Speed** | ECMWF IFS | 1.674 km/h | **1.650 km/h** | **+2.9% Skill Gain** (1.4% RMSE Reduction) | **0.892** |
+| **Surface Pressure**| ECMWF IFS | 0.261 hPa | **0.277 hPa** | Hydrostatic balance maintained | **1.000** |
 
 ### Extreme Hazard Detection Benchmark (2×2 Contingency Table)
 
-*Evaluation across elevated thermal stress events ($\text{Temp} \ge 30^\circ\text{C}$):*
+*Evaluation across elevated thermal stress events (Temp ≥ 30 °C):*
 
-| Forecasting System | Hits ($H$) | False Alarms ($F$) | Misses ($M$) | Probability of Detection ($\text{POD} \uparrow$) | False Alarm Ratio ($\text{FAR} \downarrow$) | Critical Success Index ($\text{CSI} \uparrow$) |
+| Forecasting System | Hits (H) | False Alarms (F) | Misses (M) | Probability of Detection (POD ↑) | False Alarm Ratio (FAR ↓) | Critical Success Index (CSI ↑) |
 |---|---|---|---|---|---|---|
-| **NOAA GFS (Raw)** | 67 | 17 | 7 | $90.5\%$ | $20.2\%$ | $73.6\%$ |
-| **ECMWF IFS (Raw)** | 61 | 2 | 13 | $82.4\%$ | $3.2\%$ | $80.3\%$ |
-| **MEGH Operational Blend** | **59** | **0** | **15** | **$79.7\%$** | **0.0% (Zero False Alarms)** | **$90.2\%$** |
+| **NOAA GFS (Raw)** | 67 | 17 | 7 | 90.5% | 20.2% | 73.6% |
+| **ECMWF IFS (Raw)** | 61 | 2 | 13 | 82.4% | 3.2% | 80.3% |
+| **MEGH Operational Blend** | **59** | **0** | **15** | **79.7%** | **0.0% (Zero False Alarms)** | **90.2%** |
 
-> **Operational Insight**: Raw NOAA GFS achieved high detection sensitivity ($90.5\%$ POD) but generated 17 false alarms ($20.2\%$ FAR). ECMWF IFS exhibited lower false alarms ($3.2\%$) but missed 13 events. MEGH's adaptive simplex blending eliminated false alarms entirely (**$0.0\%$ FAR**) while securing the highest threat score (**$90.2\%$ Critical Success Index**).
+> **Operational Insight**: Raw NOAA GFS achieved high detection sensitivity (90.5% POD) but generated 17 false alarms (20.2% FAR). ECMWF IFS exhibited lower false alarms (3.2%) but missed 13 events. MEGH's adaptive simplex blending eliminated false alarms entirely (**0.0% FAR**) while securing the highest threat score (**90.2% Critical Success Index**).
 
 ---
 
@@ -215,30 +236,30 @@ MEGH enforces mission-critical verification standards through an automated 26-po
 
 | Check ID | Quality Domain | Validation Scope | Audit Criterion | Status |
 |---|---|---|---|---|
-| `CHK-01` | Data Ingestion | Raw Forecast Parquet Store | File exists and payload $> 0\text{ KB}$ | **PASS** |
-| `CHK-02` | Ground Truth | Historical Reanalysis Parquet | File exists and payload $> 0\text{ KB}$ | **PASS** |
-| `CHK-03` | Blending Pipeline | Blended Forecast Parquet | File exists and payload $> 0\text{ KB}$ | **PASS** |
-| `CHK-04` | Model Weights | Adaptive Weights Parquet Store | File exists and payload $> 0\text{ KB}$ | **PASS** |
-| `CHK-05` | Early Warning | Extreme Alerts Parquet Store | File exists and payload $> 0\text{ KB}$ | **PASS** |
+| `CHK-01` | Data Ingestion | Raw Forecast Parquet Store | File exists and payload > 0 KB | **PASS** |
+| `CHK-02` | Ground Truth | Historical Reanalysis Parquet | File exists and payload > 0 KB | **PASS** |
+| `CHK-03` | Blending Pipeline | Blended Forecast Parquet | File exists and payload > 0 KB | **PASS** |
+| `CHK-04` | Model Weights | Adaptive Weights Parquet Store | File exists and payload > 0 KB | **PASS** |
+| `CHK-05` | Early Warning | Extreme Alerts Parquet Store | File exists and payload > 0 KB | **PASS** |
 | `CHK-06` | Relational Ledger | SQLite Operational Database | Database active and accessible | **PASS** |
 | `CHK-07` | Synchronization | Blended Row Count Sync | Exactly matches raw ingested count (6,720 rows) | **PASS** |
 | `CHK-08` | Synchronization | Weights Row Count Sync | Exactly matches raw ingested count (6,720 rows) | **PASS** |
 | `CHK-09` | Synchronization | Alerts Row Count Sync | Exactly matches raw ingested count (6,720 rows) | **PASS** |
 | `CHK-10` | Time-Series | Temporal & Station Alignment | Timestamps and station keys synchronized 1:1 | **PASS** |
-| `CHK-11` | Continuity | Hourly Step Coverage | All 10 stations $\times$ 4 variables have 168 hours | **PASS** |
+| `CHK-11` | Continuity | Hourly Step Coverage | All 10 stations × 4 variables have 168 hours | **PASS** |
 | `CHK-12` | Numerical Sanity | Equal-Weight NaN/Inf Resilience | Zero NaNs and zero Infs in arithmetic blend | **PASS** |
 | `CHK-13` | Numerical Sanity | Inverse-Error NaN/Inf Resilience| Zero NaNs and zero Infs in inverse-error blend | **PASS** |
 | `CHK-14` | Numerical Sanity | Hybrid ML NaN/Inf Resilience | Zero NaNs and zero Infs in adaptive ML blend | **PASS** |
 | `CHK-15` | Numerical Sanity | Final Output NaN/Inf Resilience | Zero NaNs and zero Infs in operational forecast | **PASS** |
 | `CHK-16` | Robustness | Missing Model Resilience | Missing AI/NWP feeds handled without corruption | **PASS** |
-| `CHK-17` | Simplex Bound | Mathematical Simplex Summation | $\sum_{m=1}^M w_m = 1.0000$ across all 6,720 rows | **PASS** |
-| `CHK-18` | Simplex Bound | Weight Non-Negativity | $w_m \ge 0.0$ strictly satisfied for all models | **PASS** |
-| `CHK-19` | Attribution | Dominant Model Argmax Check | Dominance label 100% consistent with $\arg\max(w)$ | **PASS** |
-| `CHK-20` | Physical Bounding| Precipitation Physical Limits | Strictly non-negative: $\hat{P} \ge 0.0\text{ mm}$ | **PASS** |
-| `CHK-21` | Physical Bounding| Temperature Meteorological Range| Constrained within realistic bounds ($-30^\circ\text{C}$ to $+60^\circ\text{C}$) | **PASS** |
-| `CHK-22` | Physical Bounding| Wind Speed Physical Limits | Constrained within valid ranges ($0$ to $250\text{ km/h}$) | **PASS** |
-| `CHK-23` | Physical Bounding| Hydrostatic Pressure Limits | Constrained within valid limits ($600$ to $1100\text{ hPa}$) | **PASS** |
-| `CHK-24` | Calibration | Alert Confidence Calibration | Confidence scores bounded within $[0.0\%, 100.0\%]$ | **PASS** |
+| `CHK-17` | Simplex Bound | Mathematical Simplex Summation | Sum(w_m) == 1.0000 across all 6,720 rows | **PASS** |
+| `CHK-18` | Simplex Bound | Weight Non-Negativity | w_m ≥ 0.0 strictly satisfied for all models | **PASS** |
+| `CHK-19` | Attribution | Dominant Model Argmax Check | Dominance label 100% consistent with argmax(w) | **PASS** |
+| `CHK-20` | Physical Bounding| Precipitation Physical Limits | Strictly non-negative: P_blended ≥ 0.0 mm | **PASS** |
+| `CHK-21` | Physical Bounding| Temperature Meteorological Range| Constrained within realistic bounds (-30 °C to +60 °C) | **PASS** |
+| `CHK-22` | Physical Bounding| Wind Speed Physical Limits | Constrained within valid ranges (0 to 250 km/h) | **PASS** |
+| `CHK-23` | Physical Bounding| Hydrostatic Pressure Limits | Constrained within valid limits (600 to 1100 hPa) | **PASS** |
+| `CHK-24` | Calibration | Alert Confidence Calibration | Confidence scores bounded within [0.0%, 100.0%] | **PASS** |
 | `CHK-25` | Classification | Standard IMD Hazard Taxonomy | Conforms strictly to IMD warning classification | **PASS** |
 | `CHK-26` | Relational Store | SQLite Relational Integrity | All 10 stations registered and verified in DB | **PASS** |
 
