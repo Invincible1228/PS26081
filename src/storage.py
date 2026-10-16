@@ -3,6 +3,7 @@ Storage and Persistence Module for Hybrid AI-NWP Blending System (PS 26081).
 Manages fast columnar Parquet files and SQLite relational cache.
 """
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -14,14 +15,14 @@ from config import PARQUET_DIR, DB_PATH, LOCATIONS
 logger = logging.getLogger(__name__)
 
 
-from contextlib import contextmanager
-
 class WeatherStorage:
     """Handles Parquet file serialization and SQLite metadata tracking."""
 
     def __init__(self, db_path: Path = DB_PATH, parquet_dir: Path = PARQUET_DIR):
-        self.db_path = db_path
-        self.parquet_dir = parquet_dir
+        self.db_path = Path(db_path)
+        self.parquet_dir = Path(parquet_dir)
+        self.parquet_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.init_database()
 
     @contextmanager

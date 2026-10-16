@@ -10,8 +10,10 @@ DATA_DIR = BASE_DIR / "data"
 PARQUET_DIR = DATA_DIR / "parquet"
 DB_PATH = DATA_DIR / "weather_store.db"
 
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+def ensure_directories():
+    """Ensures required data and parquet storage directories exist."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    PARQUET_DIR.mkdir(parents=True, exist_ok=True)
 
 # 10 Representative Indian Climatic Zones & Disaster-Prone Hubs
 LOCATIONS = {

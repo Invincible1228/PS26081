@@ -10,15 +10,37 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 import unittest
+import tempfile
+import shutil
+from pathlib import Path
 import numpy as np
 import pandas as pd
 
 from metrics import VerificationMetrics
 from evaluator import ForecastEvaluator
+from storage import WeatherStorage
+from config import PARQUET_DIR
 
 
 class TestPhase3Evaluation(unittest.TestCase):
     """Test suite for Phase 3 statistical metrics and evaluation logic."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp_dir = Path(tempfile.mkdtemp(prefix="test_megh_eval_"))
+        # Copy input parquet files if present
+        for fname in ["blended_forecasts.parquet", "historical_observations.parquet"]:
+            src_file = PARQUET_DIR / fname
+            if src_file.exists():
+                shutil.copy(src_file, cls.temp_dir / fname)
+        cls.test_storage = WeatherStorage(
+            db_path=cls.temp_dir / "test_store.db",
+            parquet_dir=cls.temp_dir
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
     def test_continuous_metrics_calculation(self):
         """Validates mathematical correctness of RMSE, MAE, Bias, and Pearson R."""
@@ -87,7 +109,7 @@ class TestPhase3Evaluation(unittest.TestCase):
 
     def test_evaluator_end_to_end_on_real_data(self):
         """Validates that ForecastEvaluator executes on stored Parquet files and generates scorecards."""
-        evaluator = ForecastEvaluator()
+        evaluator = ForecastEvaluator(storage=self.test_storage, parquet_dir=self.temp_dir)
         results = evaluator.run_full_evaluation()
 
         self.assertIn("summary", results)

@@ -4,6 +4,7 @@ Generates multi-dimensional benchmark scorecards comparing individual constituen
 against baseline and adaptive ML blending across stations, variables, and lead times.
 """
 from typing import Dict, List, Any, Optional
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import logging
@@ -19,14 +20,16 @@ logger = logging.getLogger(__name__)
 class ForecastEvaluator:
     """Evaluates multi-model forecasting performance and generates verification scorecards."""
 
-    def __init__(self):
-        self.storage = WeatherStorage()
+    def __init__(self, storage: Optional[WeatherStorage] = None, parquet_dir: Optional[Path] = None):
+        self.parquet_dir = parquet_dir or PARQUET_DIR
+        self.storage = storage or WeatherStorage(parquet_dir=self.parquet_dir)
         self.metrics = VerificationMetrics()
         self.constituent_models = [m["label"].lower().replace(" ", "_") for m in MODELS.values()]
         self.blending_systems = [
             "blend_equal_weight",
             "blend_inverse_error",
-            "blend_hybrid_ml"
+            "blend_hybrid_ml",
+            "final_blended_forecast"
         ]
 
     def build_paired_dataset(
@@ -39,9 +42,9 @@ class ForecastEvaluator:
         with observed ground-truth records on [timestamp, location_id, variable].
         """
         if df_forecasts is None:
-            df_forecasts = pd.read_parquet(PARQUET_DIR / "blended_forecasts.parquet")
+            df_forecasts = pd.read_parquet(self.parquet_dir / "blended_forecasts.parquet")
         if df_observations is None:
-            df_observations = pd.read_parquet(PARQUET_DIR / "historical_observations.parquet")
+            df_observations = pd.read_parquet(self.parquet_dir / "historical_observations.parquet")
 
         merged = pd.merge(
             df_forecasts,
@@ -92,7 +95,7 @@ class ForecastEvaluator:
                 skill_gain = self.metrics.compute_skill_score(res["rmse"], best_standalone_rmse)
 
                 is_blend = model_name in self.blending_systems
-                model_type = "Hybrid AI-NWP" if model_name == "blend_hybrid_ml" else ("Baseline Blend" if is_blend else "Standalone NWP/AI")
+                model_type = "MEGH Operational Blend" if model_name == "final_blended_forecast" else ("Hybrid AI-NWP" if model_name == "blend_hybrid_ml" else ("Baseline Blend" if is_blend else "Standalone NWP/AI"))
 
                 records.append({
                     "variable": var,
@@ -183,9 +186,12 @@ class ForecastEvaluator:
         """
         records = []
         test_cases = [
-            ("precipitation", THRESHOLDS["precipitation"]["watch"], "Rain > 15mm (Convective)"),
-            ("temperature_2m", 32.0, "Temp > 32°C (Elevated Heat)"),
-            ("wind_speed_10m", 15.0, "Wind > 15 km/h (Moderate Gale)")
+            ("precipitation", THRESHOLDS["precipitation"]["watch"], "Rain > 15mm (Convective Watch)"),
+            ("precipitation", THRESHOLDS["precipitation"]["heavy"], "Rain > 64.5mm (IMD Heavy Rain)"),
+            ("temperature_2m", THRESHOLDS["temperature_2m"]["hills_heatwave"], "Temp >= 30°C (Hills Heatwave)"),
+            ("temperature_2m", THRESHOLDS["temperature_2m"]["coastal_heatwave"], "Temp >= 37°C (Coastal Heatwave)"),
+            ("temperature_2m", THRESHOLDS["temperature_2m"]["plains_heatwave"], "Temp >= 40°C (IMD Plains Heatwave)"),
+            ("wind_speed_10m", THRESHOLDS["wind_speed_10m"]["squall"], "Wind >= 40 km/h (IMD Squall Warning)")
         ]
 
         models_to_test = ["gfs", "ecmwf_ifs", "blend_hybrid_ml"]
@@ -227,10 +233,10 @@ class ForecastEvaluator:
         contingency_df = self.evaluate_extreme_contingency(df_paired)
 
         # 1. Save to Parquet
-        summary_path = PARQUET_DIR / "evaluation_scorecard_summary.parquet"
-        station_path = PARQUET_DIR / "evaluation_by_station.parquet"
-        lead_path = PARQUET_DIR / "evaluation_by_lead_time.parquet"
-        contingency_path = PARQUET_DIR / "evaluation_contingency_extremes.parquet"
+        summary_path = self.parquet_dir / "evaluation_scorecard_summary.parquet"
+        station_path = self.parquet_dir / "evaluation_by_station.parquet"
+        lead_path = self.parquet_dir / "evaluation_by_lead_time.parquet"
+        contingency_path = self.parquet_dir / "evaluation_contingency_extremes.parquet"
 
         summary_df.to_parquet(summary_path, engine="pyarrow", index=False)
         station_df.to_parquet(station_path, engine="pyarrow", index=False)
@@ -242,9 +248,12 @@ class ForecastEvaluator:
         logger.info(f"Saved lead-time degradation evaluation -> {lead_path}")
         logger.info(f"Saved contingency extremes evaluation -> {contingency_path}")
 
-        # 2. Save summary to SQLite for dashboard querying
+        # 2. Save summary to SQLite for dashboard querying and maintain historical ledger
         with self.storage.get_connection() as conn:
             summary_df.to_sql("model_verification_scorecard", conn, if_exists="replace", index=False)
+            history_df = summary_df.copy()
+            history_df["evaluated_at"] = pd.Timestamp.now()
+            history_df.to_sql("model_verification_history", conn, if_exists="append", index=False)
 
         return {
             "summary": summary_df,
@@ -252,3 +261,93 @@ class ForecastEvaluator:
             "lead_time": lead_time_df,
             "contingency": contingency_df
         }
+
+
+def print_executive_report(eval_results: dict):
+    """
+    Outputs formatted scorecards, skill gain calculations, and categorical contingency tables.
+    """
+    summary_df = eval_results["summary"]
+    contingency_df = eval_results["contingency"]
+
+    print("\n" + "=" * 80)
+    print("      METEOROLOGICAL FORECAST VERIFICATION & BENCHMARK REPORT      ")
+    print("      Hybrid AI-NWP Blending System vs Standalone Models (PS 26081) ")
+    print("=" * 80)
+
+    # 1. Summary by Variable
+    for var in summary_df["variable"].unique():
+        var_sub = summary_df[summary_df["variable"] == var].sort_values("rmse")
+        best_nwp = var_sub["best_standalone_benchmark"].iloc[0]
+        
+        print(f"\n--- VARIABLE: {var.upper()} ---")
+        print(f"{'Model':22s} | {'Type':16s} | {'RMSE':7s} | {'MAE':7s} | {'Bias':7s} | {'Corr (R)':8s} | {'Skill Gain vs Best':18s}")
+        print("-" * 95)
+
+        for _, row in var_sub.iterrows():
+            m_name = row["model"]
+            m_type = row["model_type"]
+            rmse_str = f"{row['rmse']:.3f}"
+            mae_str = f"{row['mae']:.3f}"
+            bias_str = f"{row['bias']:+.3f}"
+            corr_str = f"{row['correlation']:.3f}"
+            
+            ss = row["skill_score_vs_best_nwp"]
+            if row["model"] == "blend_hybrid_ml":
+                ss_str = f"[*] {ss:+.1f}% (HYBRID)"
+            elif ss > 0:
+                ss_str = f"+{ss:.1f}%"
+            elif ss == 0 and row["model"] == best_nwp:
+                ss_str = "0.0% (Best Standalone)"
+            else:
+                ss_str = f"{ss:.1f}%"
+
+            marker = ">> " if "blend" in m_name else "   "
+            print(f"{marker}{m_name:19s} | {m_type:16s} | {rmse_str:7s} | {mae_str:7s} | {bias_str:7s} | {corr_str:8s} | {ss_str:18s}")
+
+        # Highlight Skill Gain
+        hybrid_row = var_sub[var_sub["model"] == "blend_hybrid_ml"]
+        if not hybrid_row.empty:
+            h_rmse = hybrid_row["rmse"].iloc[0]
+            best_nwp_row = var_sub[var_sub["model"] == best_nwp]
+            if not best_nwp_row.empty:
+                b_rmse = best_nwp_row["rmse"].iloc[0]
+                reduction = ((b_rmse - h_rmse) / b_rmse) * 100.0
+                print(f"\n  [KEY METRIC] Hybrid AI-NWP Blend achieved {reduction:.1f}% RMSE reduction over best standalone model ({best_nwp})")
+
+    # 2. Extreme Weather Contingency Table
+    if not contingency_df.empty:
+        print("\n" + "=" * 80)
+        print("                 EXTREME WEATHER DETECTION SKILL (CONTINGENCY)               ")
+        print("=" * 80)
+        print(f"{'Hazard Event':32s} | {'Model':18s} | {'Hits':5s} | {'False Alarms':12s} | {'Hit Rate (POD)':14s} | {'False Alarm (FAR)':17s} | {'Threat (CSI)':12s}")
+        print("-" * 115)
+
+        for _, row in contingency_df.iterrows():
+            pod_str = f"{row['pod_hit_rate']*100:.1f}%"
+            far_str = f"{row['far_false_alarm_ratio']*100:.1f}%"
+            csi_str = f"{row['csi_threat_score']*100:.1f}%"
+            print(f"{row['hazard_label']:32s} | {row['model']:18s} | {row['hits']:5d} | {row['false_alarms']:12d} | {pod_str:14s} | {far_str:17s} | {csi_str:12s}")
+
+    print("\n" + "=" * 80)
+    print("                     END OF EVALUATION REPORT                       ")
+    print("=" * 80 + "\n")
+
+
+ForecastEvaluator.print_executive_report = staticmethod(print_executive_report)
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Forecast Evaluation Runner (PS 26081)")
+    parser.add_argument("--run", action="store_true", help="Execute complete forecast verification and generate report")
+    args = parser.parse_args()
+
+    evaluator = ForecastEvaluator()
+    results = evaluator.run_full_evaluation()
+    print_executive_report(results)
+
+
+if __name__ == "__main__":
+    main()
+

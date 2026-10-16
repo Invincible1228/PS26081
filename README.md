@@ -166,7 +166,7 @@ Model validation was conducted on paired forecast-observation datasets (960 pair
 
 ## 🛡️ 26-Point Integrity Audit
 
-To satisfy mission-critical reliability standards for national early-warning systems, MEGH enforces an automated 26-point quality control and physical sanity audit (`audits/deep_audit.py`):
+To satisfy mission-critical reliability standards for national early-warning systems, MEGH enforces an automated 26-point quality control and physical sanity audit (`src/audit.py`):
 
 ```json
 {
@@ -270,10 +270,11 @@ python -m unittest discover tests
 
 ```
 MEGH/
-├── .gitignore                 # Excludes local caches, logs, audits, and internal docs
-├── README.md                  # Comprehensive technical documentation & benchmark report
+├── pyproject.toml             # Modern package configuration & build metadata
 ├── requirements.txt           # Production dependencies (LightGBM, PyArrow, Scikit-Learn, Pandas)
-├── run.py                     # Master operational CLI runner (--ingest, --blend, --evaluate, --test, --all)
+├── README.md                  # Comprehensive technical documentation & benchmark report
+├── .gitignore                 # Excludes local caches, logs, test data, and OS artifacts
+├── run.py                     # Master operational CLI runner (--ingest, --blend, --evaluate, --test, --audit, --all)
 │
 ├── src/                       # Production core modules
 │   ├── config.py              # Station coordinates, model registry, variables & thresholds
@@ -287,15 +288,16 @@ MEGH/
 │   ├── extreme_detector.py    # IMD-criteria extreme weather detector with calibrated confidence
 │   ├── blending_engine.py     # Master blending orchestrator synthesizing all three strategies
 │   ├── metrics.py             # Continuous (RMSE, MAE, Skill Score) & categorical (POD, FAR, CSI) metrics
-│   ├── evaluator.py           # Paired forecast-observation evaluation engine
-│   └── evaluation_report.py   # Formatted scorecard and lead-time degradation report generator
+│   ├── evaluator.py           # Paired forecast-observation evaluation & executive scorecard generator
+│   └── audit.py               # 26-point automated data & physical integrity audit engine
 │
 ├── tests/                     # Automated unit and integration test suites
 │   ├── test_pipeline.py       # Ingestion, normalization, and SQLite audit unit tests
 │   ├── test_blender.py        # Blending mechanics, simplex constraints, and alert unit tests
-│   └── test_evaluator.py      # Metric calculations, NaN safety, and scorecard unit tests
+│   ├── test_evaluator.py      # Metric calculations, NaN safety, and isolated scorecard unit tests
+│   └── test_audit.py          # 26-point integrity audit automated test
 │
-└── data/                      # Generated Parquet datasets and SQLite relational database
+└── data/                      # Columnar Parquet datasets and SQLite relational database
     ├── parquet/               # Columnar time-series forecast files and evaluation scorecards
     └── weather_store.db       # Relational metadata, ingestion audit trails, and station registry
 ```

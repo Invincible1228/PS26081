@@ -1,6 +1,5 @@
 # Documentation & Audits
 docs/
-audits/
 
 # Python cache & compiled files
 __pycache__/

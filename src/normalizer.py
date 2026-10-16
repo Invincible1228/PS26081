@@ -46,9 +46,9 @@ class ForecastNormalizer:
             "elevation": raw_json.get("elevation", 0.0)
         })
 
-        # Calculate lead time in hours relative to current time or forecast start
-        current_time = pd.Timestamp.now().floor("h")
-        base_df["lead_time_hours"] = ((base_df["timestamp"] - current_time).dt.total_seconds() / 3600).astype(int)
+        # Calculate lead time in hours relative to forecast run sequence start (0h - 168h)
+        forecast_start = times.min()
+        base_df["lead_time_hours"] = ((base_df["timestamp"] - forecast_start).dt.total_seconds() / 3600).astype(int)
 
         # Parse each variable across all models
         records = []

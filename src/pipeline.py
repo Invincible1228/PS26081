@@ -8,22 +8,27 @@ from datetime import datetime, timedelta
 import pandas as pd
 import logging
 
+from typing import Optional
 from config import LOCATIONS, VARIABLES, MODELS
 from fetcher import WeatherDataFetcher
 from normalizer import ForecastNormalizer
 from storage import WeatherStorage
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
 class Phase1DataPipeline:
     """Orchestrates end-to-end meteorological data ingestion and normalization."""
 
-    def __init__(self):
-        self.fetcher = WeatherDataFetcher()
-        self.normalizer = ForecastNormalizer()
-        self.storage = WeatherStorage()
+    def __init__(
+        self,
+        fetcher: Optional[WeatherDataFetcher] = None,
+        normalizer: Optional[ForecastNormalizer] = None,
+        storage: Optional[WeatherStorage] = None
+    ):
+        self.fetcher = fetcher or WeatherDataFetcher()
+        self.normalizer = normalizer or ForecastNormalizer()
+        self.storage = storage or WeatherStorage()
 
     def run_live_forecast_ingestion(self, forecast_days: int = 5, past_days: int = 2) -> pd.DataFrame:
         """
@@ -146,6 +151,10 @@ class Phase1DataPipeline:
             print(f"\nHistorical Obs Records: {len(obs_df):,}")
             print(f"Obs Time Range:         {obs_df['timestamp'].min()} to {obs_df['timestamp'].max()}")
         print("========================================================\n")
+
+
+# Domain alias
+ForecastDataPipeline = Phase1DataPipeline
 
 
 def main():
